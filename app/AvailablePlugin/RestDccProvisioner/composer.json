@@ -1,0 +1,9 @@
+{
+  "config": {
+    "vendor-dir": "Vendor"
+  },
+  "require": {
+    "guzzlehttp/guzzle": "~6.0",
+    "league/oauth2-client": "^2.4.1"
+  }
+}
