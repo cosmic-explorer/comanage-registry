@@ -230,7 +230,6 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
   
   protected function syncMembersForCoGroup($client, $security_group, $provisioningData) {
 
-
     $co_group_name = $provisioningData['CoGroup']['name'];
     if(!array_key_exists($co_group_name, $security_group)){
       // Ignore groups not in DocDB
@@ -290,17 +289,29 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
           }
         }
      }
+
      $usersgroup_data = array(
         'EmailUserID' => $dccid,
         'GroupID' => $security_group[$co_group_name]
       );
+
       $co_users_in_group[$dccid] = true;
+      $coPersonId = $gm['CoPerson']['id'];
 
       // If the user is not already in the DocDB group, add them
       if(!array_key_exists( $dccid, $users_group )) {
         $response = $client->post('UsersGroup', [GuzzleHttp\RequestOptions::JSON => $usersgroup_data]);
         if($response->getStatusCode() != 201){
           throw new RuntimeException(_txt('er.restdccprovisioner.usersgroup.create.failed') . ' (DccDocDbID = ' . $dccid . ')');
+        } else {
+          $this->CoProvisioningTarget->Co->CoPerson->HistoryRecord->record($coPersonId,
+                                                                           null,
+                                                                           null,
+                                                                           // There should be a better way to get the actor but
+                                                                           // at the moment there isn't
+                                                                           CakeSession::read('Auth.User.co_person_id'),
+                                                                           ActionEnum::ProvisionerAction,
+                                                                           _txt('pl.restdccprovisioner.added', array($co_group_name)));
         } 
       }
     }
@@ -311,6 +322,15 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
         $response = $client->delete('UsersGroup/' . $users_group[$u]);
         if($response->getStatusCode() != 200){
           throw new RuntimeException(_txt('er.restdccprovisioner.usersgroup.delete.failed') . ' (UsersGroupID = ' . $users_group[$u] . ')');
+        } else {
+          $this->CoProvisioningTarget->Co->CoPerson->HistoryRecord->record($coPersonId,
+                                                                           null,
+                                                                           null,
+                                                                           // There should be a better way to get the actor but
+                                                                           // at the moment there isn't
+                                                                           CakeSession::read('Auth.User.co_person_id'),
+                                                                           ActionEnum::ProvisionerAction,
+                                                                           _txt('pl.restdccprovisioner.removed', array($co_group_name)));
         }
       }
     }
@@ -333,6 +353,8 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
    */
   
   protected function syncGroupsForCoPerson($client, $security_group, $provisioningData, $activatePerson) {
+
+    $coPersonId = $provisioningData['CoPerson']['id'];
 
     $dccid = null;
     foreach($provisioningData['Identifier'] as $i) {
@@ -494,20 +516,39 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
         $response = $client->delete('UsersGroup/' . $users_group[$u]);
         if($response->getStatusCode() != 200){
           throw new RuntimeException(_txt('er.restdccprovisioner.usersgroup.delete.failed') . ' (DccDocDbID = ' . $dccid . ')' . $full_name);
-        }
+        } else {
+          $this->CoProvisioningTarget->Co->CoPerson->HistoryRecord->record($coPersonId,
+                                                                           null,
+                                                                           null,
+                                                                           // There should be a better way to get the actor but
+                                                                           // at the moment there isn't
+                                                                           CakeSession::read('Auth.User.co_person_id'),
+                                                                           ActionEnum::ProvisionerAction,
+                                                                           _txt('pl.restdccprovisioner.removed', array($u)));
+        } 
       }
     }
 
     // Iterate through the comanage groups adding to DocDB
-    foreach($co_groups as $g){
-      if(!array_key_exists($g, $users_group)){
+    foreach(array_keys($co_groups) as $g){
+      if(!array_key_exists($co_groups[$g], $users_group)){
         $usersgroup_data = array(
           'EmailUserID' => $dccid,
-          'GroupID' => $g
+          'GroupID' => $co_groups[$g]
         );
         $response = $client->post('UsersGroup', [GuzzleHttp\RequestOptions::JSON => $usersgroup_data]);
         if($response->getStatusCode() != 201){
           throw new RuntimeException(_txt('er.restdccprovisioner.usersgroup.create.failed') . ' (DccDocDbID = ' . $dccid . ')' . $full_name);
+        } else {
+          // Success !
+          $this->CoProvisioningTarget->Co->CoPerson->HistoryRecord->record($coPersonId,
+                                                                           null,
+                                                                           null,
+                                                                           // There should be a better way to get the actor but
+                                                                           // at the moment there isn't
+                                                                           CakeSession::read('Auth.User.co_person_id'),
+                                                                           ActionEnum::ProvisionerAction,
+                                                                           _txt('pl.restdccprovisioner.added', array($g)));
         }
       }
     }
