@@ -40,6 +40,18 @@ $cm_rest_dcc_provisioner_texts['en_US'] = array(
   'er.restdccprovisioner.restdcc_url'     => 'No RestDCC URL found',
   'er.restdccprovisioner.access_token'   => 'Access token not received',
   'er.restdccprovisioner.state'          => 'State token mismatch',
+  'er.restdccprovisioner.institution.notfound' => 'Insititution not found in DocDB database',
+  'er.restdccprovisioner.author.query.failed'  => 'Failed to query Author in DocDB database',
+  'er.restdccprovisioner.author.update.failed' => 'Failed to update Author in DocDB database',
+  'er.restdccprovisioner.author.create.failed' => 'Failed to create Author in DocDB database',
+  'er.restdccprovisioner.emailuser.update.failed' => 'Failed to update EmailUser in DocDB database',
+  'er.restdccprovisioner.emailuser.create.failed' => 'Failed to create EmailUser in DocDB database',
+  'er.restdccprovisioner.remoteuser.update.failed' => 'Failed to update RemoteUser in DocDB database',
+  'er.restdccprovisioner.remoteuser.create.failed' => 'Failed to create RemoteUser in DocDB database',
+  'er.restdccprovisioner.securitygroup.query.failed' => 'Failed to query SecurityGroup in DocDB database',
+  'er.restdccprovisioner.usersgroup.query.failed' => 'Failed to query UsersGroup in DocDB database',
+  'er.restdccprovisioner.usersgroup.delete.failed' => 'Failed to delete UsersGroup in DocDB database',
+  'er.restdccprovisioner.usersgroup.create.failed' => 'Failed to create UsersGroup in DocDB database',
   
   // Plugin texts
   'pl.restdccprovisioner.restdcc_url'    => 'DCC Server URL',

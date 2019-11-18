@@ -85,7 +85,7 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
    * @throws Exception
    */
   
-  protected function ghConnect($target_data) {
+  protected function dccConnect($target_data) {
     $restdcc_url = $target_data['restdcc_url'];
     $provider = new \League\OAuth2\Client\Provider\GenericProvider([
         'clientId'                => $target_data['client_id'],
@@ -114,7 +114,10 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
           $base_uri = $restdcc_url . '/rest-dcc/';
           $client = new GuzzleHttp\Client(['base_uri' => $base_uri,
                                            'timeout' => 5.0,
-                                           'headers' => ['Authorization' => 'Bearer ' . $access_token] ]);
+					   'exceptions' => false,
+					   'headers' => ['Authorization' => 'Bearer ' . $access_token,
+					                 'Accept' => 'application/json'
+				          ]]);
           return $client;
 
         } else {
@@ -137,25 +140,9 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
    * @return Boolean True on success
    * @throws RuntimeException
    */
-  
+
   public function provision($coProvisioningTargetData, $op, $provisioningData) {
-    // If this is a person related operation, we need a dcc identifier to proceed.
-    if(!empty($provisioningData['CoPerson']['id'])) {
-      if(!empty($provisioningData['Identifier'])) {
-        foreach($provisioningData['Identifier'] as $i) {
-          if($i['type'] == 'DccDocDbID'
-             && !empty($i['identifier'])
-             && $i['status'] == StatusEnum::Active) {
-            $dccid = $i['identifier'];
-            break;
-          }
-        }
-      }
-    } else {
-      // group operations do not need a DCC ID
-      $dccid = null;
-    }
-    
+  
     // What actions should we run?
     $syncGroupsForPerson = false;
     $syncMembersForGroup = false;
@@ -167,17 +154,13 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
       case ProvisioningActionEnum::CoPersonReprovisionRequested:
       case ProvisioningActionEnum::CoPersonUnexpired:
       case ProvisioningActionEnum::CoPersonUpdated:
+        $activatePerson = 1;
         $syncGroupsForPerson = true;
         break;
       case ProvisioningActionEnum::CoPersonDeleted:
-        // We don't treat CoPersonDeleted specially, because the group membership should have been
-        // deleted before the person. Note there is a bit of a race condition, in that if
-        // the DCC identifier is deleted before the group membership, we won't be able
-        // to deprovision. However, the CoGroupMember relationship is defined first in
-        // Model/CoPerson.php, so this should happen in the correct order.
-        break;
       case ProvisioningActionEnum::CoPersonExpired:
-        // Delete group memberships, but not ssh keys
+        // We never delete a DCC author, just deactivate them
+        $activatePerson = 0;
         $syncGroupsForPerson = true;
         break;
       case ProvisioningActionEnum::CoPersonEnteredGracePeriod:
@@ -191,28 +174,41 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
         $syncMembersForGroup = true;
         break;
       case ProvisioningActionEnum::CoGroupDeleted:
-        // As for CoPersonDeleted, there shouldn't really be anything to do here
+        // There shouldn't really be anything to do here
         // since the memberships should already have been deleted.
         break;
       default:
         throw new RuntimeException("Not Implemented");
         break;
     }
+
+    if($syncGroupsForPerson || $syncMembersForGroup){
+      $client = $this->dccConnect($coProvisioningTargetData['CoRestDccProvisionerTarget']);
+
+      // Make a hash table of the groups in the DocDB database
+      $response = $client->get('SecurityGroup');
+      if($response->getStatusCode() != 200) {
+        throw new RuntimeException(_txt('er.restdccprovisioner.securitygroup.query.failed'));
+      }
+      $securityGroup = array();
+      $security_group_data = json_decode($response->getBody()->getContents(), true);
+      foreach($security_group_data as $s) {
+        $securityGroup[ $s['Name'] ] = $s['GroupID'];
+      }
+    }
     
     // Execute the actions identified, if configured
-    
     if($syncGroupsForPerson) {
-      $this->syncGroupsForCoPerson($coProvisioningTargetData['CoRestDccProvisionerTarget'],
-                                   $provisioningData['CoPerson']['id'],
-                                   $provisioningData['Co']['id'],
-                                   $dccid,
-                                   $provisioningData['CoGroupMember']);
+      $ret = $this->syncGroupsForCoPerson($client,
+                                          $securityGroup,
+                                          $provisioningData,
+                                          $activatePerson);
     }
     
     if($syncMembersForGroup) {
-      $this->syncMembersForCoGroup($coProvisioningTargetData['CoRestDccProvisionerTarget'],
-                                   $provisioningData['CoGroup']['name'],
-                                   $provisioningData['CoGroup']['id']);
+      $ret = $this->syncMembersForCoGroup($client,
+                                          $securityGroup,
+                                          $provisioningData);
     }
   
     return true;
@@ -227,25 +223,98 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
    * @param  String  $client_id OAuth2 Client Secret
    * @param  String  $callback_url OAuth2 Callback URL
    * @param  String  $refresh_token DCC OAuth2 refresh token
-   * @param  String  $groupName     Group name
-   * @param  String  $coGroupId     CO Group ID
+   * @param  Array Provisioning data, populated with ['CoPerson'] or ['CoGroup']
    * @return Boolean true if groups are successfully synced
    * @throws Exception
    */
   
-  protected function syncMembersForCoGroup($target_data, $groupName, $coGroupId) {
-    error_log('syncMembersForCoGroup()');
+  protected function syncMembersForCoGroup($client, $security_group, $provisioningData) {
 
-    $client = $this->ghConnect($target_data);
 
-    $response = $client->get('SecurityGroup');
-    error_log( 'Got: ' . json_encode($response->getStatusCode()) );
-    error_log( $response->getBody() );
+    $co_group_name = $provisioningData['CoGroup']['name'];
+    if(!array_key_exists($co_group_name, $security_group)){
+      // Ignore groups not in DocDB
+      return true;
+    }
 
-    $response = $client->get('UsersGroup');
-    error_log( 'Got: ' . json_encode($response->getStatusCode()) );
-    error_log( $response->getBody() );
-    
+    // Make a hash table of the all the users in the DocDB group
+    $response = $client->get('UsersGroup?GroupID=' . $security_group[$co_group_name]);
+    if($response->getStatusCode() != 200) {
+      throw new RuntimeException(_txt('er.restdccprovisioner.usersgroup.query.failed'));
+    }
+    $users_group = array();
+    $users_group_data = json_decode($response->getBody()->getContents(), true);
+    foreach($users_group_data as $s) {
+      $users_group[ $s['EmailUserID'] ] = $s['UsersGroupID'];
+    }
+
+    $args = array();
+    $args['conditions']['CoGroupMember.co_group_id'] = $provisioningData['CoGroup']['id'];
+    $args['conditions']['CoGroupMember.member'] = true;
+    // Only pull currently valid group memberships
+    $args['conditions']['AND'][] = array(
+      'OR' => array(
+        'CoGroupMember.valid_from IS NULL',
+        'CoGroupMember.valid_from < ' => date('Y-m-d H:i:s', time())
+      )
+    );
+    $args['conditions']['AND'][] = array(
+      'OR' => array(
+        'CoGroupMember.valid_through IS NULL',
+        'CoGroupMember.valid_through > ' => date('Y-m-d H:i:s', time())
+      )
+    );
+    $args['contain']['CoPerson'] = array(// We only need Identifiers for this provisioning target.
+                                         // While Containable allows us to filter, Changelog doesn't
+                                         // currently support that. So we pull all Identifiers and
+                                         // filter later with Hash.
+                                         'Identifier');
+
+    $groupMembers = $this->CoProvisioningTarget
+                         ->Co
+                         ->CoGroup
+                         ->CoGroupMember
+                         ->find('all', $args);
+
+    $co_users_in_group = array();
+
+    foreach($groupMembers as $gm) {
+      if(isset($gm['CoGroupMember']['member']) && $gm['CoGroupMember']['member']) {
+        if(!empty($gm['CoPerson']['Identifier'])) {
+          foreach($gm['CoPerson']['Identifier'] as $i) {
+            if($i['type'] == 'DccDocDbID') {
+              // Match found
+              $dccid = $i['identifier'];
+              break;
+            }
+          }
+        }
+     }
+     $usersgroup_data = array(
+        'EmailUserID' => $dccid,
+        'GroupID' => $security_group[$co_group_name]
+      );
+      $co_users_in_group[$dccid] = true;
+
+      // If the user is not already in the DocDB group, add them
+      if(!array_key_exists( $dccid, $users_group )) {
+        $response = $client->post('UsersGroup', [GuzzleHttp\RequestOptions::JSON => $usersgroup_data]);
+        if($response->getStatusCode() != 201){
+          throw new RuntimeException(_txt('er.restdccprovisioner.usersgroup.create.failed') . ' (DccDocDbID = ' . $dccid . ')');
+        } 
+      }
+    }
+
+    // Iterate over the DocDB group members, removing any not in the COgroup
+    foreach(array_keys($users_group) as $u){
+      if(!array_key_exists($u, $co_users_in_group)){
+        $response = $client->delete('UsersGroup/' . $users_group[$u]);
+        if($response->getStatusCode() != 200){
+          throw new RuntimeException(_txt('er.restdccprovisioner.usersgroup.delete.failed') . ' (UsersGroupID = ' . $users_group[$u] . ')');
+        }
+      }
+    }
+
     return true;
   }
   
@@ -258,35 +327,191 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
    * @param  String  $client_id OAuth2 Client Secret
    * @param  String  $callback_url OAuth2 Callback URL
    * @param  String  $refresh_token DCC OAuth2 refresh token
-   * @param  String  $coPersonId   CO Person ID
-   * @param  String  $coId         CO ID
-   * @param  String  $dccid        DCC Unique ID for CO Person
-   * @param  Array   $groupMembers  Current set of group memberships for COPerson
-   * @return Boolean true if groups are successfully synced
+   * @param  Array Provisioning data, populated with ['CoPerson'] or ['CoGroup']
+   * @return Boolean true if person is successfully synced
    * @throws Exception
    */
   
-  protected function syncGroupsForCoPerson($target_data, $coPersonId, $coId, $dccid, $groupMembers) {
-    error_log('syncGroupsForCoPerson()');
-    
-    $client = $this->ghConnect($target_data);
+  protected function syncGroupsForCoPerson($client, $security_group, $provisioningData, $activatePerson) {
 
-    $response = $client->get('Author');
-    error_log( 'Got: ' . json_encode($response->getStatusCode()) );
-    error_log( $response->getBody() );
+    $dccid = null;
+    foreach($provisioningData['Identifier'] as $i) {
+      if($i['type'] == 'DccDocDbID') {
+        $dccid = $i['identifier'];
+        break;
+      }
+    }
+    if(!$dccid){
+      // avoid a race condition during id provisioning
+      return true;
+    }
 
-    $response = $client->get('RemoteUser');
-    error_log( 'Got: ' . json_encode($response->getStatusCode()) );
-    error_log( $response->getBody() );
+    foreach($provisioningData['Identifier'] as $i) {
+      if($i['type'] == 'cosid') {
+        $cosid = $i['identifier'];
+        break;
+      }
+    }
 
-    $response = $client->get('EmailUser');
-    error_log( 'Got: ' . json_encode($response->getStatusCode()) );
-    error_log( $response->getBody() );
+    $given  = $provisioningData['PrimaryName']['given'];
+    $middle = $provisioningData['PrimaryName']['middle'];
+    $family = $provisioningData['PrimaryName']['family'];
 
-    $response = $client->get('Institution');
-    error_log( 'Got: ' . json_encode($response->getStatusCode()) );
-    error_log( $response->getBody() );
-    
+    foreach($provisioningData['EmailAddress'] as $i) {
+      if($i['type'] == 'official') {
+        $email = $i['mail'];
+        break;
+      }
+    }
+
+    foreach($provisioningData['CoOrgIdentityLink'] as $i){
+      if(!$i['deleted']) {
+        foreach($i['OrgIdentity']['Identifier'] as $j){
+          if($j['type'] == 'eppn'){
+            $eppn = $j['identifier'];
+          }
+        }
+      }
+    }
+
+    $co_person_org = htmlentities($provisioningData['CoPersonRole'][0]['o']);
+    $response = $client->get('Institution?LongName=' . $co_person_org);
+    if($response->getStatusCode() != 200 ) {
+      throw new RuntimeException(_txt('er.restdccprovisioner.institution.notfound'));
+    }
+    $row = json_decode($response->getBody()->getContents(), true);
+    $institution_id = $row[0]['InstitutionID'];
+
+    $parts = explode( '@', $email );
+    $abbr = $parts[0];
+
+    $full_name = implode(' ', array_filter(array($given, $middle, $family)));
+    $mi = '';
+    if(!empty($middle)){
+      $middle_parts = preg_split("/\s+/", $middle);
+      foreach($middle_parts as $m){ 
+        $mi .= $m[0] . '.';
+      }
+    }
+
+    $author_data = array(
+      'AuthorID' => $dccid,
+      'FirstName' => substr($given, 0, 100),
+      'MiddleInitials' => substr($mi, 0, 16),
+      'LastName' => substr($family, 0, 100),
+      'InstitutionID' => $institution_id,
+      'Active' => $activatePerson,
+      'AuthorAbbr' => substr($abbr, 0, 10),
+      'FullAuthorName' => substr($full_name, 0, 256)
+    );
+
+    $remoteuser_data = array(
+      'RemoteUserID' => $dccid,
+      'RemoteUserName' => substr($eppn, 0, 255),
+      'EmailUserID' => $dccid,
+      'EmailAddress' => substr($email, 0, 255)
+    );
+
+    $emailuser_data = array(
+      'EmailUserID' => $dccid,
+      'Username' =>substr($cosid,0, 255),
+      'Password' => '',
+      'Name' => substr($full_name, 0, 255),
+      'EmailAddress' => substr($email, 0, 255),
+      'PreferHTML' => 0,
+      'CanSign' => 0,
+      'Verified' => 1,
+      'AuthorID' => $dccid,
+      'EmployeeNumber' => $dccid
+    );
+
+    $response = $client->get('Author/' . $dccid);
+    $code = $response->getStatusCode();
+
+    if ( $code == 200 ) {
+      // Update existing user
+      $response = $client->put('Author/' . $dccid, [GuzzleHttp\RequestOptions::JSON => $author_data]);
+      if($response->getStatusCode() != 200) {
+        throw new RuntimeException(_txt('er.restdccprovisioner.author.update.failed') . ' (DccDocDbID = ' . $dccid . ') ' . $full_name);
+      }
+
+      $response = $client->put('EmailUser/' . $dccid, [GuzzleHttp\RequestOptions::JSON => $emailuser_data]);
+      if($response->getStatusCode() != 200) {
+        throw new RuntimeException(_txt('er.restdccprovisioner.emailuser.update.failed') . ' (DccDocDbID = ' . $dccid . ') ' . $full_name);
+      }
+
+      $response = $client->put('RemoteUser/' . $dccid, [GuzzleHttp\RequestOptions::JSON => $remoteuser_data]);
+      if($response->getStatusCode() != 200) {
+        throw new RuntimeException(_txt('er.restdccprovisioner.remoteuser.update.failed') . ' (DccDocDbID = ' . $dccid . ')' . $full_name);
+      }
+
+    } elseif ( $code == 404 ) {
+      // Create new user
+      $response = $client->post('Author', [GuzzleHttp\RequestOptions::JSON => $author_data]);
+      if($response->getStatusCode() != 201) {
+        throw new RuntimeException(_txt('er.restdccprovisioner.author.create.failed') . ' (DccDocDbID = ' . $dccid . ')' . $full_name);
+      }
+
+      $response = $client->post('EmailUser', [GuzzleHttp\RequestOptions::JSON => $emailuser_data]);
+      if($response->getStatusCode() != 201) {
+        throw new RuntimeException(_txt('er.restdccprovisioner.emailuser.create.failed') . ' (DccDocDbID = ' . $dccid . ')' . $full_name);
+      }
+
+      $response = $client->post('RemoteUser', [GuzzleHttp\RequestOptions::JSON => $remoteuser_data]);
+      if($response->getStatusCode() != 201) {
+        throw new RuntimeException(_txt('er.restdccprovisioner.remoteuser.create.failed') . ' (DccDocDbID = ' . $dccid . ')' . $full_name);
+      }
+    } else {
+      // Something went wrong
+      throw new RuntimeException(_txt('er.restdccprovisioner.author.query.failed') . '(DccDocDbID = ' . $dccid . ')' . $full_name );
+    }
+
+    // Make a hash table of the user's current DocDB groups
+    $response = $client->get('UsersGroup?EmailUserID=' . $dccid);
+    if($response->getStatusCode() != 200) {
+      throw new RuntimeException(_txt('er.restdccprovisioner.usersgroup.query.failed') . ' (DccDocDbID = ' . $dccid . ')' . $full_name);
+    }
+    $users_group = array();
+    $users_group_data = json_decode($response->getBody()->getContents(), true);
+    foreach($users_group_data as $s) {
+      $users_group[ $s['GroupID'] ] = $s['UsersGroupID'];
+    }
+
+    // Make a hash table of the user's current COmanage groups
+    $co_groups = array();
+    $co_groups_rev = array();
+    foreach($provisioningData['CoGroupMember'] as $i){
+      $co_group_name = $i['CoGroup']['name'];
+      if(array_key_exists($co_group_name, $security_group)){
+        $co_groups_rev[$security_group[$co_group_name]] = $co_group_name;
+        $co_groups[$co_group_name] = $security_group[$co_group_name];
+      }
+    }
+
+    // Iterate through the DocDB groups deleting memberships that are not in COmanage
+    foreach(array_keys($users_group) as $u){
+      if(!array_key_exists($u, $co_groups_rev)){
+        $response = $client->delete('UsersGroup/' . $users_group[$u]);
+        if($response->getStatusCode() != 200){
+          throw new RuntimeException(_txt('er.restdccprovisioner.usersgroup.delete.failed') . ' (DccDocDbID = ' . $dccid . ')' . $full_name);
+        }
+      }
+    }
+
+    // Iterate through the comanage groups adding to DocDB
+    foreach($co_groups as $g){
+      if(!array_key_exists($g, $users_group)){
+        $usersgroup_data = array(
+          'EmailUserID' => $dccid,
+          'GroupID' => $g
+        );
+        $response = $client->post('UsersGroup', [GuzzleHttp\RequestOptions::JSON => $usersgroup_data]);
+        if($response->getStatusCode() != 201){
+          throw new RuntimeException(_txt('er.restdccprovisioner.usersgroup.create.failed') . ' (DccDocDbID = ' . $dccid . ')' . $full_name);
+        }
+      }
+    }
+
     return true;
   }
 
