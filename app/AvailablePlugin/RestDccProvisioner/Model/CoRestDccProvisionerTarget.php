@@ -412,7 +412,7 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
     if(!empty($middle)){
       $middle_parts = preg_split("/\s+/", $middle);
       foreach($middle_parts as $m){ 
-        $mi .= $m[0] . '.';
+        $mi .= $m[0];
       }
     }
 
