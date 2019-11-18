@@ -201,6 +201,8 @@ class CoGithubProvisionerTarget extends CoProvisionerPluginTarget {
       }
       
       if(!$githubid) {
+       // FIXME patch to work around greyed out dialog box
+       return true;
         throw new RuntimeException(_txt('er.githubprovisioner.github_id') . ' (CoPerson ID ' . $provisioningData['CoPerson']['id'] . ')');
       }
     }
@@ -316,6 +318,8 @@ class CoGithubProvisionerTarget extends CoProvisionerPluginTarget {
     }
     
     if(!$teamid) {
+      // FIXME patch to work around greyed out dialog box
+      return true;
       throw new RuntimeException(_txt('er.githubprovisioner.team.notfound'));
     }
     
