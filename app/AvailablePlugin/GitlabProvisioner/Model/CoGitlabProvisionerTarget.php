@@ -122,12 +122,7 @@ class CoGitlabProvisionerTarget extends CoProvisionerPluginTarget {
    */
   
   protected function ghConnect($token) {
-    $filesystemAdapter = new Local(APP . '/tmp/cache/gitlab-api-cache');
-    $filesystem = new Filesystem($filesystemAdapter);
-    $pool = new FilesystemCachePool($filesystem);
-
     $client = new \Gitlab\Client();
-    $client->addCache($pool);
 
     $client->authenticate($token, null, Gitlab\Client::AUTH_HTTP_TOKEN);
 
