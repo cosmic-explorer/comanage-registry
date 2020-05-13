@@ -76,7 +76,7 @@ class CoGitlabProvisionerTargetsController extends SPTController {
                 'client_secret' => $curdata['CoGitlabProvisionerTarget']['client_secret'],
                 'code'          => $this->request->query['code'],
                 'grant_type'    => 'authorization_code',
-                'redirect_uri'  => urlencode(Router::url(null, true))
+                'redirect_uri'  => Router::url(null, true)
               ],
               'headers' => [
                 'Accept'        => 'application/json'
