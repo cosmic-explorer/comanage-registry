@@ -69,7 +69,7 @@ class CoGitlabProvisionerTargetsController extends SPTController {
           // No need to use the cached client here
           $client = new GuzzleHttp\Client(['base_uri' => 'https://gitlab.com']);
           
-          $response = $client->request('POST', '/login/oauth/access_token',
+          $response = $client->request('POST', '/oauth/token',
             [
               'form_params' => [
                 'client_id'     => $curdata['CoGitlabProvisionerTarget']['client_id'],
@@ -218,7 +218,7 @@ class CoGitlabProvisionerTargetsController extends SPTController {
                   . '&scope=' . urlencode($scope)
                   . '&state=' . urlencode($state);
       
-      $this->redirect('https://gitlab.com/login/oauth/authorize?' . htmlentities($querystr));
+      $this->redirect('https://gitlab.com/oauth/authorize?' . htmlentities($querystr));
     }
     
     parent::performRedirect();
