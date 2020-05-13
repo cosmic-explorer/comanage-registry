@@ -96,7 +96,7 @@ class CoGitlabProvisionerTarget extends CoProvisionerPluginTarget {
     if(isset($coProvisioningTargetData['CoGitlabProvisionerTarget']['provision_group_members'])
        && $coProvisioningTargetData['CoGitlabProvisionerTarget']['provision_group_members']) {
       // remove_unknown_members requires provision_group_members
-      $scopes[] = 'admin:org';
+      $scopes[] = 'api';
     }
     
     /*
