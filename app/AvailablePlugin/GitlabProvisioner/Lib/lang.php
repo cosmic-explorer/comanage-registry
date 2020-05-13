@@ -60,7 +60,7 @@ $cm_gitlab_provisioner_texts['en_US'] = array(
   'pl.gitlabprovisioner.provision_group_members.desc' => 'If enabled, active COmanage users with a "GitLab" Identifier will be provisioned into GitLab Teams whose names match COmanage groups.',
   'pl.gitlabprovisioner.provision_ssh_keys' => 'Provision SSH Keys to GitLab',
   'pl.gitlabprovisioner.provision_ssh_keys.desc' => 'If enabled, COmanage users with a "GitLab" Identifier and with associated SSH Keys will have their keys provisioned to their GitLab accounts.',
-  'pl.gitlabprovisioner.register'       => 'First, <a href="https://gitlab.com/settings/applications/new">register COmanage as an application with GitLab</a>.<br />
+  'pl.gitlabprovisioner.register'       => 'First, <a href="https://gitlab.com/profile/applications">register COmanage as an application with GitLab</a>.<br />
                                             Set the <i>Authorization callback URL</i> to be <pre>%1$s</pre><br />
                                             After registering, copy the Client ID and Client Secret values assigned by GitLab here.',
   'pl.gitlabprovisioner.remove_unknown_members' => 'Remove Unknown Members from GitLab Teams',
