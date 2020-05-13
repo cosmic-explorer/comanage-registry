@@ -74,7 +74,13 @@ class CoGitlabProvisionerTargetsController extends SPTController {
               'form_params' => [
                 'client_id'     => $curdata['CoGitlabProvisionerTarget']['client_id'],
                 'client_secret' => $curdata['CoGitlabProvisionerTarget']['client_secret'],
-                'code'          => $this->request->query['code']
+                'code'          => $this->request->query['code'],
+                'grant_type'    => 'authorization_code',
+                'redirect_uri'  => urlencode(Router::url(array('plugin'     => 'gitlab_provisioner',
+                                                               'controller' => 'co_gitlab_provisioner_targets',
+                                                               'action'     => 'callback',
+                                                               $this->viewVars['co_gitlab_provisioner_targets'][0]['CoGitlabProvisionerTarget']['id']
+                                                               ), true))
               ],
               'headers' => [
                 'Accept'        => 'application/json'
@@ -215,6 +221,7 @@ class CoGitlabProvisionerTargetsController extends SPTController {
                                                                    'action'     => 'callback',
                                                                    $this->viewVars['co_gitlab_provisioner_targets'][0]['CoGitlabProvisionerTarget']['id']
                                                                   ), true))
+                  . '&response_type=code'
                   . '&scope=' . urlencode($scope)
                   . '&state=' . urlencode($state);
       
