@@ -194,11 +194,11 @@ class CoRestDccProvisionerTargetsController extends SPTController {
       // This is a save operation, so get a (new) access token
       
       $restdcc_url = $this->viewVars['co_rest_dcc_provisioner_targets'][0]['CoRestDccProvisionerTarget']['restdcc_url'];
-      $redirect_uri = urlencode(Router::url(array('plugin'     => 'rest_dcc_provisioner',
+      $redirect_uri = Router::url(array('plugin'     => 'rest_dcc_provisioner',
                                                   'controller' => 'co_rest_dcc_provisioner_targets',
                                                   'action'     => 'callback',
                                                   $this->viewVars['co_rest_dcc_provisioner_targets'][0]['CoRestDccProvisionerTarget']['id']
-                                                  ), true));
+                                                  ), true);
       $this->Session->write('Plugin.RestDccProvisioner.redirect_uri', $redirect_uri);
 
       $provider = new \League\OAuth2\Client\Provider\GenericProvider([
