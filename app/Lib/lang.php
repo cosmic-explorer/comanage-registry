@@ -848,7 +848,7 @@ original notification at
   'er.auth' =>        'Not authenticated',
   'er.auth.co' =>     'You are not a member of any COs. Please contact an administrator for assistance.',
   'er.auth.empty' =>  'Found empty username at login. Please contact an administrator for assistance.',
-  'er.auth.org' =>    'Your login identifier "%1$s" is not yet registered. If you have already completed the registration form, this means that your request for registration is in proceess. Please check for an email from comanage-do-not-reply@np3m.org asking you to confirm your registratuon. If you have already clicked the link in this email, your request is waiting for an administrator to approve it.',
+  'er.auth.org' =>    'Your login identifier "%1$s" is not yet registered. If you have already completed the registration form, this means that your request for registration is in proceess. Please check for an email from comanage-do-not-reply@np3m.org asking you to confirm your registration. If you have already clicked the link in this email, your request is waiting for an administrator to approve it.',
   'er.auth.roles' =>  'You do not have any current roles. If your request for enrollment is still being processed, you will not be able to login until it is approved. Please contact an administrator for assistance.',
   // authr = Authenticator (model), vs Authentication (login)
   'er.authr.unlocked' => 'Authenticator is already unlocked',
