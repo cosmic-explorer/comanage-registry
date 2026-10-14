@@ -131,10 +131,12 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
   }
   
   /**
-   * Fetch every row of a REST resource, following the API's pagination.
-   * finale-rest returns 100 rows per page by default; reading a single page
-   * made membership syncs for groups with more than 100 members treat the
-   * remaining members as missing and re-insert them on every sync.
+   * Fetch every row of a REST resource, following the API's pagination if
+   * it paginates. finale-rest returns 100 rows per page by default; reading a
+   * single page made membership syncs for groups with more than 100 members
+   * treat the remaining members as missing and re-insert them on every sync.
+   * When the API does not paginate (no Content-Range header) the first
+   * response is the whole list and no further requests are made.
    *
    * @since  COmanage Registry v3.2.3
    * @param  Object $client Guzzle client from dccConnect
@@ -159,7 +161,10 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
         return null;
       }
       $rows = array_merge($rows, $data);
-      if(count($data) < $count) {
+      // finale-rest sends Content-Range only when it is paginating. Without it
+      // (rest-dcc >= 1.2.2 disables pagination) the whole list has already been
+      // returned, so stop rather than re-reading the remainder at each offset.
+      if(!$response->hasHeader('Content-Range') || count($data) < $count) {
         break;
       }
       $offset += $count;
