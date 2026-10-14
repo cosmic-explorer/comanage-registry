@@ -85,49 +85,62 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
    * @throws Exception
    */
   
-  protected function dccConnect($target_data) {
+  protected function dccConnect($target_data, $refresh=false) {
     $restdcc_url = $target_data['restdcc_url'];
-    $provider = new \League\OAuth2\Client\Provider\GenericProvider([
-        'clientId'                => $target_data['client_id'],
-        'clientSecret'            => $target_data['client_secret'],
-        'redirectUri'             => $target_data['callback_url'],
-        'urlAuthorize'            => $restdcc_url . '/oauth/oauth2/auth',
-        'urlAccessToken'          => $restdcc_url . '/oauth/oauth2/token',
-        'urlResourceOwnerDetails' => $restdcc_url . '/oauth/userinfo'
-    ]);
+    $access_token = $target_data['access_token'];
 
-    // refresh the access token
-    $newAccessToken = $provider->getAccessToken('refresh_token', [
-        'refresh_token' => $target_data['refresh_token']
-    ]);
+    if($refresh || empty($access_token)) {
+      // Hydra rotates refresh tokens, so each stored refresh token is single
+      // use. Refresh only when the stored access token is missing or has been
+      // rejected, instead of on every provisioning call: two interleaved
+      // provisioning runs used to invalidate each other's token and leave the
+      // target needing manual re-authorisation.
+      $provider = new \League\OAuth2\Client\Provider\GenericProvider([
+          'clientId'                => $target_data['client_id'],
+          'clientSecret'            => $target_data['client_secret'],
+          'redirectUri'             => $target_data['callback_url'],
+          'urlAuthorize'            => $restdcc_url . '/oauth/oauth2/auth',
+          'urlAccessToken'          => $restdcc_url . '/oauth/oauth2/token',
+          'urlResourceOwnerDetails' => $restdcc_url . '/oauth/userinfo'
+      ]);
 
-    $access_token = $newAccessToken->getToken();
-    $refresh_token = $newAccessToken->getRefreshToken();
+      try {
+        $newAccessToken = $provider->getAccessToken('refresh_token', [
+            'refresh_token' => $target_data['refresh_token']
+        ]);
+      }
+      catch(Exception $e) {
+        throw new RuntimeException(_txt('er.restdccprovisioner.access_token') . ': ' . $e->getMessage());
+      }
 
-    if(!empty($access_token) && !empty($refresh_token)) {
-      // save the updated tokens
+      $access_token = $newAccessToken->getToken();
+      $refresh_token = $newAccessToken->getRefreshToken();
+
+      if(empty($access_token)) {
+        throw new RuntimeException(_txt('er.restdccprovisioner.access_token'));
+      }
+
+      // Save the new tokens. This is a Model, so errors are reported by
+      // exception (the caller records them); Flash is not available here.
       $target = new CoRestDccProvisionerTarget();
       $target->id = $target_data['id'];
-      if($target->saveField('access_token', $access_token) &&
-        $target->saveField('refresh_token', $refresh_token)) {
 
-          $base_uri = $restdcc_url . '/rest-dcc/';
-          $client = new GuzzleHttp\Client(['base_uri' => $base_uri,
-                                           'timeout' => 5.0,
-					   'exceptions' => false,
-					   'headers' => ['Authorization' => 'Bearer ' . $access_token,
-					                 'Accept' => 'application/json'
-				          ]]);
-          return $client;
-
-        } else {
-          $this->Flash->set(_txt('er.db.save'), array('key' => 'error'));
-        }
-      } else {
-        $this->Flash->set(_txt('er.restdccprovisioner.access_token'), array('key' => 'error'));
+      if(!$target->saveField('access_token', $access_token)) {
+        throw new RuntimeException(_txt('er.db.save'));
+      }
+      if(!empty($refresh_token) && !$target->saveField('refresh_token', $refresh_token)) {
+        throw new RuntimeException(_txt('er.db.save'));
+      }
     }
 
-    return null;
+    $base_uri = $restdcc_url . '/rest-dcc/';
+    $client = new GuzzleHttp\Client(['base_uri' => $base_uri,
+                                     'timeout' => 5.0,
+                                     'exceptions' => false,
+                                     'headers' => ['Authorization' => 'Bearer ' . $access_token,
+                                                   'Accept' => 'application/json'
+                                                  ]]);
+    return $client;
   }
   
   /**
@@ -226,10 +239,17 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
     }
 
     if($syncGroupsForPerson || $syncMembersForGroup){
-      $client = $this->dccConnect($coProvisioningTargetData['CoRestDccProvisionerTarget']);
+      $targetData = $coProvisioningTargetData['CoRestDccProvisionerTarget'];
+      $client = $this->dccConnect($targetData);
 
-      // Make a hash table of the groups in the DocDB database
+      // Make a hash table of the groups in the DocDB database. If the first
+      // call fails, the stored access token has most likely expired or been
+      // revoked: refresh it once and retry before giving up.
       $security_group_data = $this->dccGetAll($client, 'SecurityGroup');
+      if($security_group_data === null) {
+        $client = $this->dccConnect($targetData, true);
+        $security_group_data = $this->dccGetAll($client, 'SecurityGroup');
+      }
       if($security_group_data === null) {
         throw new RuntimeException(_txt('er.restdccprovisioner.securitygroup.query.failed'));
       }
@@ -319,32 +339,35 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
     $co_users_in_group = array();
 
     foreach($groupMembers as $gm) {
+      if(empty($gm['CoGroupMember']['member'])) {
+        // Owners who are not members are not provisioned
+        continue;
+      }
+
       // Reset per member; previously a member without a DccDocDbID inherited
       // the previous member's id.
       $dccid = null;
-      if(isset($gm['CoGroupMember']['member']) && $gm['CoGroupMember']['member']) {
-        if(!empty($gm['CoPerson']['Identifier'])) {
-          foreach($gm['CoPerson']['Identifier'] as $i) {
-            if($i['type'] == 'DccDocDbID') {
-              // Match found
-              $dccid = $i['identifier'];
-              break;
-            }
+      if(!empty($gm['CoPerson']['Identifier'])) {
+        foreach($gm['CoPerson']['Identifier'] as $i) {
+          if($i['type'] == 'DccDocDbID') {
+            // Match found
+            $dccid = $i['identifier'];
+            break;
           }
         }
-     }
+      }
 
-     if(!$dccid) {
-       // Not yet provisioned to the DCC; skip rather than misattribute
-       continue;
-     }
+      if(!$dccid) {
+        // Not yet provisioned to the DCC; skip rather than misattribute
+        continue;
+      }
 
-     $usersgroup_data = array(
+      $usersgroup_data = array(
         'EmailUserID' => $dccid,
         'GroupID' => $security_group[$co_group_name]
       );
 
-      $co_users_in_group[$dccid] = true;
+      $co_users_in_group[$dccid] = $gm['CoPerson']['id'];
       $coPersonId = $gm['CoPerson']['id'];
 
       // If the user is not already in the DocDB group, add them
@@ -372,14 +395,32 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
         if($response->getStatusCode() != 200){
           throw new RuntimeException(_txt('er.restdccprovisioner.usersgroup.delete.failed') . ' (UsersGroupID = ' . $users_group[$u] . ')');
         } else {
-          $this->CoProvisioningTarget->Co->CoPerson->HistoryRecord->record($coPersonId,
+          // The removed person is, by definition, no longer a member of this
+          // group, so look them up by their DccDocDbID identifier. Previously
+          // the history record was attached to whichever member happened to be
+          // iterated last.
+          $args = array();
+          $args['conditions']['Identifier.type'] = 'DccDocDbID';
+          $args['conditions']['Identifier.identifier'] = $u;
+          $args['conditions'][] = 'Identifier.co_person_id IS NOT NULL';
+          $args['contain'] = false;
+
+          $removedId = $this->CoProvisioningTarget->Co->CoPerson->Identifier->find('first', $args);
+          $removedCoPersonId = !empty($removedId['Identifier']['co_person_id'])
+                               ? $removedId['Identifier']['co_person_id'] : null;
+
+          $this->CoProvisioningTarget->Co->CoPerson->HistoryRecord->record($removedCoPersonId,
                                                                            null,
                                                                            null,
                                                                            // There should be a better way to get the actor but
                                                                            // at the moment there isn't
                                                                            CakeSession::read('Auth.User.co_person_id'),
                                                                            ActionEnum::ProvisionerAction,
-                                                                           _txt('pl.restdccprovisioner.removed', array($co_group_name)));
+                                                                           _txt('pl.restdccprovisioner.removed', array($co_group_name))
+                                                                             . ' (DccDocDbID = ' . $u . ')',
+                                                                           // Also attach the record to the group, which is
+                                                                           // the only anchor if the person is gone
+                                                                           $provisioningData['CoGroup']['id']);
         }
       }
     }
