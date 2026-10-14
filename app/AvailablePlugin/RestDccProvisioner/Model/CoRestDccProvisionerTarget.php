@@ -131,6 +131,44 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
   }
   
   /**
+   * Fetch every row of a REST resource, following the API's pagination.
+   * finale-rest returns 100 rows per page by default; reading a single page
+   * made membership syncs for groups with more than 100 members treat the
+   * remaining members as missing and re-insert them on every sync.
+   *
+   * @since  COmanage Registry v3.2.3
+   * @param  Object $client Guzzle client from dccConnect
+   * @param  String $path   Resource path, optionally with a query string
+   * @return Array|null All rows, or null on a non-200 response
+   */
+
+  protected function dccGetAll($client, $path) {
+    $rows = array();
+    $count = 100;
+    $offset = 0;
+    $sep = (strpos($path, '?') === false) ? '?' : '&';
+
+    // Guard against an endless loop if the API ever ignores offset.
+    for($page = 0; $page < 1000; $page++) {
+      $response = $client->get($path . $sep . 'count=' . $count . '&offset=' . $offset);
+      if($response->getStatusCode() != 200) {
+        return null;
+      }
+      $data = json_decode($response->getBody()->getContents(), true);
+      if(!is_array($data)) {
+        return null;
+      }
+      $rows = array_merge($rows, $data);
+      if(count($data) < $count) {
+        break;
+      }
+      $offset += $count;
+    }
+
+    return $rows;
+  }
+
+  /**
    * Provision for the specified CO Person.
    *
    * @since  COmanage Registry v3.2.3
@@ -186,12 +224,11 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
       $client = $this->dccConnect($coProvisioningTargetData['CoRestDccProvisionerTarget']);
 
       // Make a hash table of the groups in the DocDB database
-      $response = $client->get('SecurityGroup');
-      if($response->getStatusCode() != 200) {
+      $security_group_data = $this->dccGetAll($client, 'SecurityGroup');
+      if($security_group_data === null) {
         throw new RuntimeException(_txt('er.restdccprovisioner.securitygroup.query.failed'));
       }
       $securityGroup = array();
-      $security_group_data = json_decode($response->getBody()->getContents(), true);
       foreach($security_group_data as $s) {
         $securityGroup[ $s['Name'] ] = $s['GroupID'];
       }
@@ -236,13 +273,12 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
       return true;
     }
 
-    // Make a hash table of the all the users in the DocDB group
-    $response = $client->get('UsersGroup?GroupID=' . $security_group[$co_group_name]);
-    if($response->getStatusCode() != 200) {
+    // Make a hash table of the all the users in the DocDB group (all pages)
+    $users_group_data = $this->dccGetAll($client, 'UsersGroup?GroupID=' . $security_group[$co_group_name]);
+    if($users_group_data === null) {
       throw new RuntimeException(_txt('er.restdccprovisioner.usersgroup.query.failed'));
     }
     $users_group = array();
-    $users_group_data = json_decode($response->getBody()->getContents(), true);
     foreach($users_group_data as $s) {
       $users_group[ $s['EmailUserID'] ] = $s['UsersGroupID'];
     }
@@ -278,6 +314,9 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
     $co_users_in_group = array();
 
     foreach($groupMembers as $gm) {
+      // Reset per member; previously a member without a DccDocDbID inherited
+      // the previous member's id.
+      $dccid = null;
       if(isset($gm['CoGroupMember']['member']) && $gm['CoGroupMember']['member']) {
         if(!empty($gm['CoPerson']['Identifier'])) {
           foreach($gm['CoPerson']['Identifier'] as $i) {
@@ -288,6 +327,11 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
             }
           }
         }
+     }
+
+     if(!$dccid) {
+       // Not yet provisioned to the DCC; skip rather than misattribute
+       continue;
      }
 
      $usersgroup_data = array(
@@ -488,13 +532,12 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
       throw new RuntimeException(_txt('er.restdccprovisioner.author.query.failed') . '(DccDocDbID = ' . $dccid . ')' . $full_name );
     }
 
-    // Make a hash table of the user's current DocDB groups
-    $response = $client->get('UsersGroup?EmailUserID=' . $dccid);
-    if($response->getStatusCode() != 200) {
+    // Make a hash table of the user's current DocDB groups (all pages)
+    $users_group_data = $this->dccGetAll($client, 'UsersGroup?EmailUserID=' . $dccid);
+    if($users_group_data === null) {
       throw new RuntimeException(_txt('er.restdccprovisioner.usersgroup.query.failed') . ' (DccDocDbID = ' . $dccid . ')' . $full_name);
     }
     $users_group = array();
-    $users_group_data = json_decode($response->getBody()->getContents(), true);
     foreach($users_group_data as $s) {
       $users_group[ $s['GroupID'] ] = $s['UsersGroupID'];
     }
