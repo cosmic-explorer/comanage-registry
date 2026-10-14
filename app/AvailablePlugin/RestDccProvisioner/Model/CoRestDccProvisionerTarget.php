@@ -187,6 +187,45 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
   }
 
   /**
+   * Add a UsersGroup membership row, tolerating one that already exists.
+   * UsersGroup has UNIQUE KEY (EmailUserID, GroupID); finale-rest answers a
+   * duplicate insert with HTTP 400 and a validation error list whose message
+   * says the fields "must be unique". That can only happen if two provisioning
+   * runs interleave, and the membership is then already in place, so treat it
+   * as success without recording history.
+   *
+   * @since  COmanage Registry v3.2.3
+   * @param  Object  $client Guzzle client from dccConnect
+   * @param  Integer $dccid  DocDB EmailUserID (the CO Person's DccDocDbID)
+   * @param  Integer $groupId DocDB SecurityGroup GroupID
+   * @return Boolean True if a row was created, false if it already existed
+   * @throws RuntimeException on any other failure
+   */
+
+  protected function dccAddMembership($client, $dccid, $groupId, $errorContext) {
+    $response = $client->post('UsersGroup', [GuzzleHttp\RequestOptions::JSON => array(
+      'EmailUserID' => $dccid,
+      'GroupID'     => $groupId
+    )]);
+
+    $code = $response->getStatusCode();
+
+    if($code == 201) {
+      return true;
+    }
+
+    if($code == 400) {
+      $body = (string)$response->getBody();
+      if(stripos($body, 'must be unique') !== false) {
+        // Already a member; nothing to do
+        return false;
+      }
+    }
+
+    throw new RuntimeException(_txt('er.restdccprovisioner.usersgroup.create.failed') . ' ' . $errorContext);
+  }
+
+  /**
    * Provision for the specified CO Person.
    *
    * @since  COmanage Registry v3.2.3
@@ -362,20 +401,13 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
         continue;
       }
 
-      $usersgroup_data = array(
-        'EmailUserID' => $dccid,
-        'GroupID' => $security_group[$co_group_name]
-      );
-
       $co_users_in_group[$dccid] = $gm['CoPerson']['id'];
       $coPersonId = $gm['CoPerson']['id'];
 
       // If the user is not already in the DocDB group, add them
       if(!array_key_exists( $dccid, $users_group )) {
-        $response = $client->post('UsersGroup', [GuzzleHttp\RequestOptions::JSON => $usersgroup_data]);
-        if($response->getStatusCode() != 201){
-          throw new RuntimeException(_txt('er.restdccprovisioner.usersgroup.create.failed') . ' (DccDocDbID = ' . $dccid . ')');
-        } else {
+        if($this->dccAddMembership($client, $dccid, $security_group[$co_group_name],
+                                   '(DccDocDbID = ' . $dccid . ')')) {
           $this->CoProvisioningTarget->Co->CoPerson->HistoryRecord->record($coPersonId,
                                                                            null,
                                                                            null,
@@ -621,14 +653,8 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
     // Iterate through the comanage groups adding to DocDB
     foreach(array_keys($co_groups) as $g){
       if(!array_key_exists($co_groups[$g], $users_group)){
-        $usersgroup_data = array(
-          'EmailUserID' => $dccid,
-          'GroupID' => $co_groups[$g]
-        );
-        $response = $client->post('UsersGroup', [GuzzleHttp\RequestOptions::JSON => $usersgroup_data]);
-        if($response->getStatusCode() != 201){
-          throw new RuntimeException(_txt('er.restdccprovisioner.usersgroup.create.failed') . ' (DccDocDbID = ' . $dccid . ')' . $full_name);
-        } else {
+        if($this->dccAddMembership($client, $dccid, $co_groups[$g],
+                                   '(DccDocDbID = ' . $dccid . ') ' . $full_name)) {
           // Success !
           $this->CoProvisioningTarget->Co->CoPerson->HistoryRecord->record($coPersonId,
                                                                            null,
