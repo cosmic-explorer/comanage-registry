@@ -633,7 +633,7 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
       }
     } else {
       // Something went wrong
-      throw new RuntimeException(_txt('er.restdccprovisioner.author.query.failed') . '(DccDocDbID = ' . $dccid . ')' . $full_name );
+      throw new RuntimeException(_txt('er.restdccprovisioner.author.query.failed') . ' (DccDocDbID = ' . $dccid . ') ' . $full_name . ' ' . $this->dccDescribe($response));
     }
 
     // Make a hash table of the user's current DocDB groups (all pages)
