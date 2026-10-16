@@ -144,6 +144,32 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
   }
   
   /**
+   * Describe a failed REST response for an error message: HTTP status plus the
+   * start of the body (finale-rest returns {"message": ..., "errors": [...]}).
+   *
+   * @since  COmanage Registry v3.2.3
+   * @param  Object $response Guzzle response
+   * @return String e.g. "[HTTP 400: Validation error: InstitutionID cannot be null]"
+   */
+
+  protected function dccDescribe($response) {
+    $code = $response->getStatusCode();
+    $body = trim((string)$response->getBody());
+    $json = json_decode($body, true);
+    if(is_array($json)) {
+      $parts = array();
+      if(!empty($json['message'])) { $parts[] = $json['message']; }
+      if(!empty($json['errors']) && is_array($json['errors'])) {
+        foreach(array_slice($json['errors'], 0, 3) as $e) {
+          $parts[] = is_array($e) ? implode(' ', array_filter(array(isset($e['field']) ? $e['field'] : '', isset($e['message']) ? $e['message'] : ''))) : (string)$e;
+        }
+      }
+      $body = implode('; ', $parts);
+    }
+    return '[HTTP ' . $code . ($body !== '' ? ': ' . substr(strip_tags($body), 0, 200) : '') . ']';
+  }
+
+  /**
    * Fetch every row of a REST resource, following the API's pagination if
    * it paginates. finale-rest returns 100 rows per page by default; reading a
    * single page made membership syncs for groups with more than 100 members
@@ -222,7 +248,7 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
       }
     }
 
-    throw new RuntimeException(_txt('er.restdccprovisioner.usersgroup.create.failed') . ' ' . $errorContext);
+    throw new RuntimeException(_txt('er.restdccprovisioner.usersgroup.create.failed') . ' ' . $errorContext . ' ' . $this->dccDescribe($response));
   }
 
   /**
@@ -340,7 +366,7 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
     // Make a hash table of the all the users in the DocDB group (all pages)
     $users_group_data = $this->dccGetAll($client, 'UsersGroup?GroupID=' . $security_group[$co_group_name]);
     if($users_group_data === null) {
-      throw new RuntimeException(_txt('er.restdccprovisioner.usersgroup.query.failed'));
+      throw new RuntimeException(_txt('er.restdccprovisioner.usersgroup.query.failed') . ' ' . $this->dccDescribe($response));
     }
     $users_group = array();
     foreach($users_group_data as $s) {
@@ -425,7 +451,7 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
       if(!array_key_exists($u, $co_users_in_group)){
         $response = $client->delete('UsersGroup/' . $users_group[$u]);
         if($response->getStatusCode() != 200){
-          throw new RuntimeException(_txt('er.restdccprovisioner.usersgroup.delete.failed') . ' (UsersGroupID = ' . $users_group[$u] . ')');
+          throw new RuntimeException(_txt('er.restdccprovisioner.usersgroup.delete.failed') . ' (UsersGroupID = ' . $users_group[$u] . ') ' . $this->dccDescribe($response));
         } else {
           // The removed person is, by definition, no longer a member of this
           // group, so look them up by their DccDocDbID identifier. Previously
@@ -521,7 +547,7 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
     $co_person_org = htmlentities($provisioningData['CoPersonRole'][0]['o']);
     $response = $client->get('Institution?LongName=' . $co_person_org);
     if($response->getStatusCode() != 200 ) {
-      throw new RuntimeException(_txt('er.restdccprovisioner.institution.notfound'));
+      throw new RuntimeException(_txt('er.restdccprovisioner.institution.notfound') . ' ' . $this->dccDescribe($response));
     }
     $row = json_decode($response->getBody()->getContents(), true);
     $institution_id = $row[0]['InstitutionID'];
@@ -576,34 +602,34 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
       // Update existing user
       $response = $client->put('Author/' . $dccid, [GuzzleHttp\RequestOptions::JSON => $author_data]);
       if($response->getStatusCode() != 200) {
-        throw new RuntimeException(_txt('er.restdccprovisioner.author.update.failed') . ' (DccDocDbID = ' . $dccid . ') ' . $full_name);
+        throw new RuntimeException(_txt('er.restdccprovisioner.author.update.failed') . ' (DccDocDbID = ' . $dccid . ') ' . $full_name . ' ' . $this->dccDescribe($response));
       }
 
       $response = $client->put('EmailUser/' . $dccid, [GuzzleHttp\RequestOptions::JSON => $emailuser_data]);
       if($response->getStatusCode() != 200) {
-        throw new RuntimeException(_txt('er.restdccprovisioner.emailuser.update.failed') . ' (DccDocDbID = ' . $dccid . ') ' . $full_name);
+        throw new RuntimeException(_txt('er.restdccprovisioner.emailuser.update.failed') . ' (DccDocDbID = ' . $dccid . ') ' . $full_name . ' ' . $this->dccDescribe($response));
       }
 
       $response = $client->put('RemoteUser/' . $dccid, [GuzzleHttp\RequestOptions::JSON => $remoteuser_data]);
       if($response->getStatusCode() != 200) {
-        throw new RuntimeException(_txt('er.restdccprovisioner.remoteuser.update.failed') . ' (DccDocDbID = ' . $dccid . ')' . $full_name);
+        throw new RuntimeException(_txt('er.restdccprovisioner.remoteuser.update.failed') . ' (DccDocDbID = ' . $dccid . ')' . $full_name . ' ' . $this->dccDescribe($response));
       }
 
     } elseif ( $code == 404 ) {
       // Create new user
       $response = $client->post('Author', [GuzzleHttp\RequestOptions::JSON => $author_data]);
       if($response->getStatusCode() != 201) {
-        throw new RuntimeException(_txt('er.restdccprovisioner.author.create.failed') . ' (DccDocDbID = ' . $dccid . ')' . $full_name);
+        throw new RuntimeException(_txt('er.restdccprovisioner.author.create.failed') . ' (DccDocDbID = ' . $dccid . ')' . $full_name . ' ' . $this->dccDescribe($response));
       }
 
       $response = $client->post('EmailUser', [GuzzleHttp\RequestOptions::JSON => $emailuser_data]);
       if($response->getStatusCode() != 201) {
-        throw new RuntimeException(_txt('er.restdccprovisioner.emailuser.create.failed') . ' (DccDocDbID = ' . $dccid . ')' . $full_name);
+        throw new RuntimeException(_txt('er.restdccprovisioner.emailuser.create.failed') . ' (DccDocDbID = ' . $dccid . ')' . $full_name . ' ' . $this->dccDescribe($response));
       }
 
       $response = $client->post('RemoteUser', [GuzzleHttp\RequestOptions::JSON => $remoteuser_data]);
       if($response->getStatusCode() != 201) {
-        throw new RuntimeException(_txt('er.restdccprovisioner.remoteuser.create.failed') . ' (DccDocDbID = ' . $dccid . ')' . $full_name);
+        throw new RuntimeException(_txt('er.restdccprovisioner.remoteuser.create.failed') . ' (DccDocDbID = ' . $dccid . ')' . $full_name . ' ' . $this->dccDescribe($response));
       }
     } else {
       // Something went wrong
@@ -613,7 +639,7 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
     // Make a hash table of the user's current DocDB groups (all pages)
     $users_group_data = $this->dccGetAll($client, 'UsersGroup?EmailUserID=' . $dccid);
     if($users_group_data === null) {
-      throw new RuntimeException(_txt('er.restdccprovisioner.usersgroup.query.failed') . ' (DccDocDbID = ' . $dccid . ')' . $full_name);
+      throw new RuntimeException(_txt('er.restdccprovisioner.usersgroup.query.failed') . ' (DccDocDbID = ' . $dccid . ')' . $full_name . ' ' . $this->dccDescribe($response));
     }
     $users_group = array();
     foreach($users_group_data as $s) {
@@ -636,7 +662,7 @@ class CoRestDccProvisionerTarget extends CoProvisionerPluginTarget {
       if(!array_key_exists($u, $co_groups_rev)){
         $response = $client->delete('UsersGroup/' . $users_group[$u]);
         if($response->getStatusCode() != 200){
-          throw new RuntimeException(_txt('er.restdccprovisioner.usersgroup.delete.failed') . ' (DccDocDbID = ' . $dccid . ')' . $full_name);
+          throw new RuntimeException(_txt('er.restdccprovisioner.usersgroup.delete.failed') . ' (DccDocDbID = ' . $dccid . ')' . $full_name . ' ' . $this->dccDescribe($response));
         } else {
           $this->CoProvisioningTarget->Co->CoPerson->HistoryRecord->record($coPersonId,
                                                                            null,
